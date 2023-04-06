@@ -5,6 +5,8 @@ import numpy as np
 import threading
 import copy
 import time
+import os
+from os import path
 from sys import exit
 import contextvars
 from queue import Queue
@@ -12,6 +14,7 @@ from queue import Queue
 import wave
 # import soundfile as sf
 
+audio_test =  path.join(os.path.dirname(os.path.realpath(__file__)), '../audios/diemtin_AI-30s.wav')
 
 class LiveWhisper():
     exit_event = threading.Event()
@@ -62,7 +65,7 @@ class LiveWhisper():
         #                     frames_per_buffer=CHUNK)
 
         # stream from file
-        wf = wave.open('eu.wav', 'rb')
+        wf = wave.open(audio_test, 'rb')
         # stream = audio.open(
         #     format = FORMAT,
         #     channels = CHANNELS,
