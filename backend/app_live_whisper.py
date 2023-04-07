@@ -3,6 +3,8 @@ import time
 from time import sleep
 from datetime import datetime, timedelta
 import warnings
+import random
+from lorem_text import lorem
 import threading
 import webrtcvad
 import numpy as np
@@ -14,6 +16,9 @@ from flask_socketio import SocketIO, emit
 from queue import Queue
 from engineio.payload import Payload
 from tempfile import NamedTemporaryFile
+import logging
+
+logging.getLogger("werkzeug").disabled = True
 
 Payload.max_decode_packets = 50
 UPLOAD_FOLDER = os.getcwd()
@@ -46,26 +51,32 @@ STEP_SIZE = 960                         # in bytes
 PHRASE_TIMEOUT = 3                      # in seconds
 THIRTY_SECS_SIZE = 30*2*SAMPLE_RATE     # in bytes
 
+CLOSE_REQUEST = "close"
+
 # global variables
 combined_bytes = bytes()                # in bytes
 last_sample_timestamp = None            # timestamp
 cache_sample = None                     # {'timestamp':...,'data':...}
 isMove2NextChunk = False                # each chunk maximum 30s
 isPhraseComplete = False                # boolean
-lastCombinedTranscribedText = None      # string
+lastTranscribedText = None              # string
 isFinal = False                         # session finished fired from client
+sampling_count = 0                      # int
+input_queue_count = 0                   # int
 
 # load whisper model
 model = whisper.load_model("tiny")
 print("Model loaded.\n")
 
 def buildTranscribedDataResponse():
-    global isPhraseComplete
     global lastTranscribedText
+    global isMove2NextChunk
+    global isPhraseComplete
     global isFinal
 
     return {
         'data': lastTranscribedText, 
+        'isMove2NextChunk': isMove2NextChunk,
         'isPhraseComplete': isPhraseComplete, 
         'isFinal': isFinal
     }
@@ -80,6 +91,14 @@ def popAtMost30SecondLengthSample() -> bytearray:
     global cache_sample
     global isMove2NextChunk
     global isPhraseComplete
+    global isFinal
+    global CLOSE_REQUEST
+    global sampling_count
+
+    # =========== SAMPLING =============
+    isFreshBytesAdded = False
+    sampling_count +=1
+    print(F"==========> SAMPLING #{sampling_count}:")
     
     if isPhraseComplete:
         combined_bytes = bytes()
@@ -89,71 +108,154 @@ def popAtMost30SecondLengthSample() -> bytearray:
     if isMove2NextChunk:
         combined_bytes = bytes()
         last_sample_timestamp = None
-        isMove2NextChunk = False
+        isMove2NextChunk = False    
 
     if cache_sample:
         last_sample_timestamp = cache_sample['timestamp']
         combined_bytes = cache_sample['data']
+        isFreshBytesAdded = True
         cache_sample = None
+        print(f"<-...cache sample (len={len(combined_bytes)}) added!")
 
     if not last_sample_timestamp:
         first_sample = input_queue.get()
+        
+        # check if close event fired
+        if first_sample['data'] == CLOSE_REQUEST:
+            isFinal = True
+            if not isFreshBytesAdded:
+                combined_bytes = bytes()            
+            
+            print(f"-> Close request fired. Return with current bytes (len={len(combined_bytes)}).")
+            print("<=====================================")
+            return combined_bytes
+
         last_sample_timestamp = first_sample['timestamp']
         combined_bytes = first_sample['data']
+        isFreshBytesAdded = True
+        print(f"-> 1st sample (len={len(first_sample['data'])}) for a new chunk added!")
 
     while (not input_queue.empty()) and (len(combined_bytes) < THIRTY_SECS_SIZE):
         current_sample = input_queue.get()
         current_sample_timestamp = current_sample['timestamp']
         current_sample_data = current_sample['data']
+
+        # check if close event fired
+        if current_sample_data == CLOSE_REQUEST:
+            isFinal = True
+            if not isFreshBytesAdded:
+                combined_bytes = bytes()
+            
+            print(f"-> Close request fired. Return with current bytes (len={len(combined_bytes)}).")
+            print("<=====================================")
+            return combined_bytes
         
-        if current_sample_timestamp - last_sample_timestamp < timedelta(seconds=PHRASE_TIMEOUT):
+        time_gap = datetime.utcfromtimestamp(current_sample_timestamp) \
+                    - datetime.utcfromtimestamp(last_sample_timestamp)
+        print(f"-> time_gap={time_gap}")
+        
+        if time_gap < timedelta(seconds=PHRASE_TIMEOUT):
             if len(combined_bytes) + len(current_sample_data) <= THIRTY_SECS_SIZE:
+                
+                print("-> +++appending to combined_bytes....")
+                print(f"-> current bytes: {len(combined_bytes)}")
+                print(f"-> adding bytes: {len(current_sample_data)}")
+                print(f"-> resulted bytes: {len(combined_bytes) + len(current_sample_data)}")
+
                 last_sample_timestamp = current_sample_timestamp
                 combined_bytes += current_sample_data
+                isFreshBytesAdded = True
             else:
                 cache_sample = current_sample
+                last_sample_timestamp = None
                 isMove2NextChunk = True
+                print("->...caching, move to next chunk....")
                 break
         else:
             cache_sample = current_sample
+            last_sample_timestamp = None
             isPhraseComplete = True
+            print("->...caching, finish a phrase, new line....")
             break
-    
+
+    print(f"-> Sampling finalizing...")
+    if not isFreshBytesAdded:
+        print ("-> No fresh data added!")
+        combined_bytes = bytes()
+    print(f"-> isMove2NextChunk: {isMove2NextChunk}")
+    print(f"-> isPhraseComplete: {isPhraseComplete}")
+    print(f"-> isFinal: {isFinal}")
+    print(f"-> OUTPUT LENGTH: {len(combined_bytes)}")
+    if cache_sample:
+        print(f"-> cache_sample: timestamp:{cache_sample['timestamp']},  data_len:{len(cache_sample['data'])}")
+    else:
+        print("-> cache_sampLe: Cache empty!")
+    print("<=====================================")
+
     return combined_bytes
 
+def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
+    '''
+    Transcribe audio frames using Whisper model.
+    - audio_frames: of sample rate of 16000Hz.
+    - isFake: fake transcription with random return value and time of execution.
+    '''
+    if isFake:
+        time.sleep(random.randrange(1,5)/2.0)
+        return ''.join([lorem.words(random.randrange(3,7)), ' '])
+
+    audio = np.frombuffer(audio_frames, np.int16).flatten().astype(np.float32) / 32768.0
+    print (f"-> sample length={len(audio) / SAMPLE_RATE} in second.")
+    audio = whisper.pad_or_trim(audio)
+    text = model.transcribe(audio)
+
+    return text['text']
+
 def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
-        print("\nTranscribing from your buffers forever\n")
-        while True:
-            if in_queue.empty():
-                sleep(0.05)
+    global isFinal
+    global lastTranscribedText
+    global sampling_count
+
+    print("\n Transcribing from your buffers forever...\n")
+    while True:
+        if in_queue.empty():
+            sleep(0.05)
+            continue
+
+        #TODO: how to solve states (isFinal,...), pass method as arg,...
+        audio_frames = popAtMost30SecondLengthSample()
+
+        print(F"==========> PROCESSING #{sampling_count}:")
+        print (f"-> INPUT LENGTH={len(audio_frames)}")
+
+        if len(audio_frames) == 0:
+            if isFinal:
+                print(f"-> Close request fired. Backend shut down!")
+                print("<=====================================")
+                break
+            else:
+                print("<=====================================")
                 continue
 
-            audio_frames = popAtMost30SecondLengthSample()
-            if audio_frames == "close":
-                socket.emit(
-                    "speechData", 
-                    buildTranscribedDataResponse())
-                break
-            
-            print (f"whisper_processing: audio_frames length={len(audio_frames)}")
-            start = time.perf_counter()
+        start = time.perf_counter()
+        text = whisper_transribe(audio_frames, isFake=True)
+        stop = time.perf_counter()
+        print(f"-> inference time: {stop - start}")
+        print(f"-> transcription={text}")
+        print("<=====================================")
 
-            audio = np.frombuffer(audio_frames, np.int16).flatten().astype(np.float32) / 32768.0
+        if text != "":
+            # emit socket event to client with transcribed data
+            lastTranscribedText = text
+            socket.emit(
+                "speechData",
+                buildTranscribedDataResponse())  
 
-            print (f"sample_length={len(audio) / SAMPLE_RATE} in second.")
-            audio = whisper.pad_or_trim(audio)
-            print (f"sample_length_pad={ len(audio) / SAMPLE_RATE} in second.")
-
-            text = model.transcribe(audio)
-            inference_time = time.perf_counter()-start
-
-            print (f"text={text['text']}")
-            if text['text'] != "":
-                # emit socket event to client with transcribed data
-                # data to emit: [text,sample_length,inference_time]
-                socket.emit(
-                    "speechData",
-                    buildTranscribedDataResponse())                    
+        # check if finish request fired
+        if isFinal:
+            print(f"-> Close request fired. Backend shut down!")
+            print("<=====================================")
+            break                  
 
 def isContainSpeech(message: bytearray) -> bool:
     values = [(message)[i:i + STEP_SIZE] 
@@ -171,6 +273,7 @@ def isContainSpeech(message: bytearray) -> bool:
 def stream(message):
     global frames
     global input_queue
+    global input_queue_count
 
     # message length = 2048 in bytes
     # print (f"message length={len(message['chunk'])}")
@@ -178,20 +281,24 @@ def stream(message):
     if len(message["chunk"]) >= MIN_CHUNK_SIZE:
         if isContainSpeech(message["chunk"]):
             frames += message["chunk"]
-        else:
-            input_queue.put({'timestamp': datetime.utcnow(), 'data': frames})
+        elif len(frames) >= MIN_CHUNK_SIZE:
+            input_queue.put({'timestamp': datetime.utcnow().timestamp(), 'data': frames})
+
+            echo_data = {'timestamp': datetime.utcnow().timestamp(), 'data_len': len(frames)}
+            input_queue_count +=1
+            print (f">>>input queue item #{input_queue_count}: {echo_data}")
             frames = b''           
 
 @socketio.on("connect")
 def connected():
     """event listener when client connects to the server"""
     print(request.sid)
-    print("client has connected")
+    print(f"----> Client {request.sid} connected!")
     emit("connect", {"data": f"id: {request.sid} is connected"})       
 
 @socketio.on('start')
 def start():
-    print("start")
+    print("----> STARTED!")
     whisper_process = threading.Thread(target=whisper_processing, args=(
         model, input_queue, socketio))
     whisper_process.start()
@@ -200,13 +307,17 @@ def start():
 @socketio.on('stop')
 def stop():
     global input_queue
-    print("stop")
-    input_queue.put("close")
+    global CLOSE_REQUEST
+
+    echo_data = {'timestamp': datetime.utcnow().timestamp(), 'data': CLOSE_REQUEST}
+    print(f">>>stop queue item: {echo_data}")
+    input_queue.put({'timestamp': datetime.utcnow().timestamp(), 'data': CLOSE_REQUEST})
+    print("----> STOPPED!")
 
 @socketio.on("disconnect")
 def disconnected():
     """event listener when client disconnects to the server"""
-    print("user disconnected")
+    print("----> Client {request.sid} disconnected")
     emit("disconnect", f"user {request.sid} disconnected", broadcast=True)
 
 # flask root endpoint
