@@ -14,7 +14,7 @@ from queue import Queue
 import wave
 # import soundfile as sf
 
-audio_test =  path.join(os.path.dirname(os.path.realpath(__file__)), '../audios/diemtin_AI-30s.wav')
+audio_test =  path.join(os.path.dirname(os.path.realpath(__file__)), '../audios/eu.wav')
 
 class LiveWhisper():
     exit_event = threading.Event()

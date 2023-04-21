@@ -18,7 +18,7 @@ from engineio.payload import Payload
 from tempfile import NamedTemporaryFile
 import logging
 
-logging.getLogger("werkzeug").disabled = True
+# logging.getLogger("werkzeug").disabled = True
 
 Payload.max_decode_packets = 50
 UPLOAD_FOLDER = os.getcwd()
@@ -32,7 +32,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 CORS(app, resources={r"/*": {"origins": "*"}})
 warnings.filterwarnings("ignore")
 
-async_mode = 'threading'
+async_mode = None
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
 vad = webrtcvad.Vad()
@@ -201,7 +201,7 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
     - isFake: fake transcription with random return value and time of execution.
     '''
     if isFake:
-        time.sleep(random.randrange(1,5)/2.0)
+        time.sleep(random.randrange(6,12)/2.0)
         return ''.join([lorem.words(random.randrange(3,7)), ' '])
 
     audio = np.frombuffer(audio_frames, np.int16).flatten().astype(np.float32) / 32768.0
@@ -238,7 +238,7 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
                 continue
 
         start = time.perf_counter()
-        text = whisper_transribe(audio_frames, isFake=True)
+        text = whisper_transribe(audio_frames, isFake=False)
         stop = time.perf_counter()
         print(f"-> inference time: {stop - start}")
         print(f"-> transcription={text}")
@@ -260,12 +260,13 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
 def isContainSpeech(message: bytearray) -> bool:
     values = [(message)[i:i + STEP_SIZE] 
                   for i in range(0, len(message), STEP_SIZE)]
+    print (values)
 
     is_speeches=[]
     for value in values[:-1]:
         is_speech = vad.is_speech(value, SAMPLE_RATE, MIN_CHUNK_SIZE)
         is_speeches.append(is_speech)
-    
+    print (is_speeches)
     if any(is_speeches): return True
     else: return False
 
@@ -276,10 +277,11 @@ def stream(message):
     global input_queue_count
 
     # message length = 2048 in bytes
-    # print (f"message length={len(message['chunk'])}")
+    print (f"message length={len(message['chunk'])}")
 
     if len(message["chunk"]) >= MIN_CHUNK_SIZE:
         if isContainSpeech(message["chunk"]):
+            print ("OK")
             frames += message["chunk"]
         elif len(frames) >= MIN_CHUNK_SIZE:
             input_queue.put({'timestamp': datetime.utcnow().timestamp(), 'data': frames})
@@ -293,7 +295,7 @@ def stream(message):
 def connected():
     """event listener when client connects to the server"""
     print(request.sid)
-    print(f"----> Client {request.sid} connected!")
+    print(f"----> Client connected!")
     emit("connect", {"data": f"id: {request.sid} is connected"})       
 
 @socketio.on('start')
@@ -317,8 +319,8 @@ def stop():
 @socketio.on("disconnect")
 def disconnected():
     """event listener when client disconnects to the server"""
-    print("----> Client {request.sid} disconnected")
-    emit("disconnect", f"user {request.sid} disconnected", broadcast=True)
+    print("----> Client disconnected")
+    emit("disconnect", f"user disconnected", broadcast=True)
 
 # flask root endpoint
 @app.route("/", methods=["GET"])
@@ -326,5 +328,6 @@ def welcome():
     return "Whispering something on air!"
 
 if __name__ == "__main__":
+    # socketio.run(app, debug=True, port=5003, host="0.0.0.0")
     app.run(debug=True, port=5003, host="0.0.0.0")
 
