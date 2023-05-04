@@ -1,6 +1,6 @@
 import io from 'socket.io-client';
 
-const socket = new io.connect("http://192.168.1.125:5003/");
+const socket = new io.connect("http://127.0.0.1:5000/");
 
 // Connect status
 socket.on("connect", (msg) => {
