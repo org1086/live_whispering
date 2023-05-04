@@ -17,8 +17,10 @@ from queue import Queue
 from engineio.payload import Payload
 from tempfile import NamedTemporaryFile
 import logging
+import speech_recognition as sr
+import io
 
-# logging.getLogger("werkzeug").disabled = True
+logging.getLogger("werkzeug").disabled = True
 
 Payload.max_decode_packets = 50
 UPLOAD_FOLDER = os.getcwd()
@@ -59,6 +61,7 @@ last_sample_timestamp = None            # timestamp
 cache_sample = None                     # {'timestamp':...,'data':...}
 isMove2NextChunk = False                # each chunk maximum 30s
 isPhraseComplete = False                # boolean
+isFreshBytesAdded = False               # boolean
 lastTranscribedText = None              # string
 isFinal = False                         # session finished fired from client
 sampling_count = 0                      # int
@@ -91,6 +94,7 @@ def popAtMost30SecondLengthSample() -> bytearray:
     global cache_sample
     global isMove2NextChunk
     global isPhraseComplete
+    global isFreshBytesAdded
     global isFinal
     global CLOSE_REQUEST
     global sampling_count
@@ -181,7 +185,6 @@ def popAtMost30SecondLengthSample() -> bytearray:
     print(f"-> Sampling finalizing...")
     if not isFreshBytesAdded:
         print ("-> No fresh data added!")
-        combined_bytes = bytes()
     print(f"-> isMove2NextChunk: {isMove2NextChunk}")
     print(f"-> isPhraseComplete: {isPhraseComplete}")
     print(f"-> isFinal: {isFinal}")
@@ -203,8 +206,24 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
     if isFake:
         time.sleep(random.randrange(6,12)/2.0)
         return ''.join([lorem.words(random.randrange(3,7)), ' '])
+    
+    print (f"audio_frames in bytes length: {len(audio_frames)}")
+
+    # TEST -> save recording to file to test audio quality
+    audio_data = sr.AudioData(audio_frames, sample_rate=SAMPLE_RATE, sample_width=2)
+    wav_data = audio_data.get_wav_data()
+    print (f"wav_data length: {len(wav_data)}")
+    audio = np.frombuffer(wav_data, np.int16).flatten()
+    print (f"wav audio sample in Int16 flattened buffer length: {len(audio)}")
+    wav_data_io = io.BytesIO(wav_data)
+    # Write wav data to the temporary file as bytes.
+    with open(f'recorded_from_mic_{sampling_count}.wav', 'w+b') as f:
+        f.write(wav_data_io.read())
+    # END of the test
 
     audio = np.frombuffer(audio_frames, np.int16).flatten().astype(np.float32) / 32768.0
+    print (f"audio_sample in Float32 length: {len(audio)}")
+
     print (f"-> sample length={len(audio) / SAMPLE_RATE} in second.")
     audio = whisper.pad_or_trim(audio)
     text = model.transcribe(audio)
@@ -215,6 +234,7 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
     global isFinal
     global lastTranscribedText
     global sampling_count
+    global isFreshBytesAdded
 
     print("\n Transcribing from your buffers forever...\n")
     while True:
@@ -236,6 +256,11 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
             else:
                 print("<=====================================")
                 continue
+        
+        # check if fresh data present
+        if not isFreshBytesAdded:
+            sleep(0.05)
+            continue
 
         start = time.perf_counter()
         text = whisper_transribe(audio_frames, isFake=False)
@@ -260,13 +285,13 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
 def isContainSpeech(message: bytearray) -> bool:
     values = [(message)[i:i + STEP_SIZE] 
                   for i in range(0, len(message), STEP_SIZE)]
-    print (values)
+    # print (values)
 
     is_speeches=[]
     for value in values[:-1]:
         is_speech = vad.is_speech(value, SAMPLE_RATE, MIN_CHUNK_SIZE)
         is_speeches.append(is_speech)
-    print (is_speeches)
+    # print (is_speeches)
     if any(is_speeches): return True
     else: return False
 
@@ -276,12 +301,11 @@ def stream(message):
     global input_queue
     global input_queue_count
 
-    # message length = 2048 in bytes
-    print (f"message length={len(message['chunk'])}")
+    # message length = 4096 in bytes (=2*2048 Int16 buffersize)
+    # print (f"message length={len(message['chunk'])}")
 
     if len(message["chunk"]) >= MIN_CHUNK_SIZE:
         if isContainSpeech(message["chunk"]):
-            print ("OK")
             frames += message["chunk"]
         elif len(frames) >= MIN_CHUNK_SIZE:
             input_queue.put({'timestamp': datetime.utcnow().timestamp(), 'data': frames})
@@ -300,11 +324,12 @@ def connected():
 
 @socketio.on('start')
 def start():
-    print("----> STARTED!")
-    whisper_process = threading.Thread(target=whisper_processing, args=(
-        model, input_queue, socketio))
-    whisper_process.start()
-    whisper_process.join()
+    # print("----> STARTED!")
+    # whisper_process = threading.Thread(target=whisper_processing, args=(
+    #     model, input_queue, socketio))
+    # whisper_process.start()
+    # whisper_process.join()
+    pass
 
 @socketio.on('stop')
 def stop():
@@ -327,7 +352,13 @@ def disconnected():
 def welcome():
     return "Whispering something on air!"
 
-if __name__ == "__main__":
-    # socketio.run(app, debug=True, port=5003, host="0.0.0.0")
+if __name__ == "__main__":    
+    print("----> STARTED!")
+    whisper_process = threading.Thread(target=whisper_processing, args=(
+        model, input_queue, socketio))
+    whisper_process.start()
+    
     app.run(debug=True, port=5000, host="0.0.0.0")
+    
+    whisper_process.join()
 
