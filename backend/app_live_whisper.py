@@ -69,7 +69,7 @@ input_queue_count = 0                   # int
 
 # get support language set for output
 LANGUAGES = os.getenv('LANGUAGES') if os.getenv('LANGUAGES') else "vi,en"
-LANGUAGES  = LANGUAGES.split(',')
+LANGUAGES  = [item.strip() for item in LANGUAGES.split(',')]
 
 # Get environment variables
 WHISPER_MODEL_NAME = os.getenv('WHISPER_MODEL_NAME') if os.getenv('WHISPER_MODEL_NAME') else "medium"
