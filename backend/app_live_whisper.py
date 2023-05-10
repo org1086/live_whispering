@@ -67,6 +67,9 @@ isFinal = False                         # session finished fired from client
 sampling_count = 0                      # int
 input_queue_count = 0                   # int
 
+# get support language set for output
+LANGUAGES = os.getenv('LANGUAGES') if os.getenv('LANGUAGES') else "vi,en"
+LANGUAGES  = LANGUAGES.split(',')
 
 # Get environment variables
 WHISPER_MODEL_NAME = os.getenv('WHISPER_MODEL_NAME') if os.getenv('WHISPER_MODEL_NAME') else "medium"
@@ -206,6 +209,8 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
     - audio_frames: of sample rate of 16000Hz.
     - isFake: fake transcription with random return value and time of execution.
     '''
+    global LANGUAGES
+
     if isFake:
         time.sleep(random.randrange(6,12)/2.0)
         return ''.join([lorem.words(random.randrange(3,7)), ' '])
@@ -229,9 +234,14 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
 
     print (f"-> sample length={len(audio) / SAMPLE_RATE} in second.")
     audio = whisper.pad_or_trim(audio)
-    text = model.transcribe(audio)
+    result = model.transcribe(audio)
 
-    return text['text']
+    # ouput only text in support languages
+    transcript = ''
+    if result["language"] in LANGUAGES:
+        transcript = result['text']
+
+    return transcript
 
 def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
     global isFinal
