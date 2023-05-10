@@ -22,7 +22,7 @@ import io
 
 logging.getLogger("werkzeug").disabled = True
 
-Payload.max_decode_packets = 50
+Payload.max_decode_packets = 5000
 UPLOAD_FOLDER = os.getcwd()
 ALLOWED_EXTENSIONS = {'wav', 'mp3'}
 
@@ -34,7 +34,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 CORS(app, resources={r"/*": {"origins": "*"}})
 warnings.filterwarnings("ignore")
 
-async_mode = None
+async_mode = 'eventlet'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
 vad = webrtcvad.Vad()
@@ -67,9 +67,12 @@ isFinal = False                         # session finished fired from client
 sampling_count = 0                      # int
 input_queue_count = 0                   # int
 
+
+# Get environment variables
+WHISPER_MODEL_NAME = os.getenv('WHISPER_MODEL_NAME') if os.getenv('WHISPER_MODEL_NAME') else "medium"
 # load whisper model
-model = whisper.load_model("tiny")
-print("Model loaded.\n")
+model = whisper.load_model(WHISPER_MODEL_NAME)
+print(f"Model whisper `{WHISPER_MODEL_NAME}` loaded.")
 
 def buildTranscribedDataResponse():
     global lastTranscribedText
@@ -209,17 +212,17 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
     
     print (f"audio_frames in bytes length: {len(audio_frames)}")
 
-    # TEST -> save recording to file to test audio quality
-    audio_data = sr.AudioData(audio_frames, sample_rate=SAMPLE_RATE, sample_width=2)
-    wav_data = audio_data.get_wav_data()
-    print (f"wav_data length: {len(wav_data)}")
-    audio = np.frombuffer(wav_data, np.int16).flatten()
-    print (f"wav audio sample in Int16 flattened buffer length: {len(audio)}")
-    wav_data_io = io.BytesIO(wav_data)
-    # Write wav data to the temporary file as bytes.
-    with open(f'recorded_from_mic_{sampling_count}.wav', 'w+b') as f:
-        f.write(wav_data_io.read())
-    # END of the test
+    # # TEST -> save recording to file to test audio quality
+    # audio_data = sr.AudioData(audio_frames, sample_rate=SAMPLE_RATE, sample_width=2)
+    # wav_data = audio_data.get_wav_data()
+    # print (f"wav_data length: {len(wav_data)}")
+    # audio = np.frombuffer(wav_data, np.int16).flatten()
+    # print (f"wav audio sample in Int16 flattened buffer length: {len(audio)}")
+    # wav_data_io = io.BytesIO(wav_data)
+    # # Write wav data to the temporary file as bytes.
+    # with open(f'recorded_from_mic_{sampling_count}.wav', 'w+b') as f:
+    #     f.write(wav_data_io.read())
+    # # END of the test
 
     audio = np.frombuffer(audio_frames, np.int16).flatten().astype(np.float32) / 32768.0
     print (f"audio_sample in Float32 length: {len(audio)}")
@@ -236,10 +239,11 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
     global sampling_count
     global isFreshBytesAdded
 
-    print("\n Transcribing from your buffers forever...\n")
+    print("Transcribing from your buffers forever...\n")
     while True:
         if in_queue.empty():
             sleep(0.05)
+            #print ("empty input queue!")
             continue
 
         #TODO: how to solve states (isFinal,...), pass method as arg,...
@@ -324,11 +328,11 @@ def connected():
 
 @socketio.on('start')
 def start():
-    # print("----> STARTED!")
-    # whisper_process = threading.Thread(target=whisper_processing, args=(
-    #     model, input_queue, socketio))
-    # whisper_process.start()
-    # whisper_process.join()
+    print("----> STARTED!")
+    whisper_process = threading.Thread(target=whisper_processing, args=(
+        model, input_queue, socketio))
+    whisper_process.start()
+    whisper_process.join()
     pass
 
 @socketio.on('stop')
@@ -353,12 +357,6 @@ def welcome():
     return "Whispering something on air!"
 
 if __name__ == "__main__":    
-    print("----> STARTED!")
-    whisper_process = threading.Thread(target=whisper_processing, args=(
-        model, input_queue, socketio))
-    whisper_process.start()
-    
-    app.run(debug=True, port=5000, host="0.0.0.0")
-    
-    whisper_process.join()
+    # app.run(debug=True, port=5000, host="0.0.0.0")
+    socketio.run(app, debug=True, port=5000, host="0.0.0.0")
 
