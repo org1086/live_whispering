@@ -1,3 +1,10 @@
+# pip install -r requiments.txt --find-links https://download.pytorch.org/whl/cu111/torch_stable.html
+--find-links https://download.pytorch.org/whl/cu111/torch_stable.html
+
+torch==1.10.1+cu111
+torchvision==0.11.2+cu111
+torchaudio==0.10.1
+
 attrs==21.4.0
 bidict==0.22.0
 certifi==2021.10.8
@@ -16,7 +23,7 @@ idna==3.3
 itsdangerous==2.1.1
 Jinja2==3.0.3
 joblib==1.1.0
-#kenlm==0.0.0
+# kenlm==0.0.0
 MarkupSafe==2.1.0
 numpy==1.22.3
 openpyxl==3.0.10
@@ -38,8 +45,6 @@ six==1.16.0
 sortedcontainers==2.4.0
 SoundFile==0.10.3.post1
 tokenizers==0.11.6
-torch==1.11.0
-torchaudio==0.11.0
 tqdm==4.63.0
 typing-extensions==4.1.1
 urllib3==1.26.8
@@ -48,3 +53,5 @@ Werkzeug==2.0.3
 openai-whisper
 lorem_text
 SpeechRecognition
+gunicorn==20.1.0
+eventlet==0.30.2
