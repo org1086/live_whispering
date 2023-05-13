@@ -56,6 +56,7 @@ THIRTY_SECS_SIZE = 30*2*SAMPLE_RATE     # in bytes
 CLOSE_REQUEST = "close"
 
 # global variables
+backend_started = False                 # boolean
 combined_bytes = bytes()                # in bytes
 last_sample_timestamp = None            # timestamp
 cache_sample = None                     # {'timestamp':...,'data':...}
@@ -213,7 +214,7 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
 
     if isFake:
         time.sleep(random.randrange(6,12)/2.0)
-        return ''.join([lorem.words(random.randrange(3,7)), ' '])
+        return ''.join([lorem.words(random.randrange(7,20)), ' '])
     
     print (f"audio_frames in bytes length: {len(audio_frames)}")
 
@@ -244,6 +245,7 @@ def whisper_transribe(audio_frames: bytes(), isFake: bool = False) -> str:
     return transcript
 
 def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
+    global backend_started
     global isFinal
     global lastTranscribedText
     global sampling_count
@@ -274,10 +276,16 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
         # check if fresh data present
         if not isFreshBytesAdded:
             sleep(0.05)
+            print(f"-> Cached transcription={lastTranscribedText}")
+            # emit cached transcription since no fresh data for this loop
+            socket.emit(
+                "speechData",
+                buildTranscribedDataResponse())  
+            print("<=====================================")
             continue
 
         start = time.perf_counter()
-        text = whisper_transribe(audio_frames, isFake=False)
+        text = whisper_transribe(audio_frames, isFake=True)
         stop = time.perf_counter()
         print(f"-> inference time: {stop - start}")
         print(f"-> transcription={text}")
@@ -294,6 +302,7 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
         if isFinal:
             print(f"-> Close request fired. Backend shut down!")
             print("<=====================================")
+            backend_started = False
             break                  
 
 def isContainSpeech(message: bytearray) -> bool:
@@ -338,7 +347,19 @@ def connected():
 
 @socketio.on('start')
 def start():
+    global input_queue
+    global backend_started
+
+    if backend_started:
+        if input_queue.qsize() > 0:
+            # backend is busy, quit!
+            return
+
     print("----> STARTED!")
+    backend_started = True
+    # clear out of interest buffers from input_queue
+    input_queue = Queue()
+
     whisper_process = threading.Thread(target=whisper_processing, args=(
         model, input_queue, socketio))
     whisper_process.start()
