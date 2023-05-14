@@ -39,8 +39,6 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode)
 
 vad = webrtcvad.Vad()
 vad.set_mode(3)
-input_queue = Queue()
-#output_queue = Queue()
 frames = b''
 
 SAMPLE_RATE = 16000                     # hertz
@@ -57,6 +55,7 @@ CLOSE_REQUEST = "close"
 
 # global variables
 backend_started = False                 # boolean
+input_queue = Queue()
 combined_bytes = bytes()                # in bytes
 last_sample_timestamp = None            # timestamp
 cache_sample = None                     # {'timestamp':...,'data':...}
@@ -255,7 +254,7 @@ def whisper_processing(model: Whisper, in_queue: Queue, socket: SocketIO):
     while True:
         if in_queue.empty():
             sleep(0.05)
-            #print ("empty input queue!")
+            # print ("empty input queue!")
             continue
 
         #TODO: how to solve states (isFinal,...), pass method as arg,...
@@ -318,6 +317,33 @@ def isContainSpeech(message: bytearray) -> bool:
     if any(is_speeches): return True
     else: return False
 
+def resetNewTranscriptionJob():
+    global backend_started
+    global input_queue 
+    global combined_bytes
+    global last_sample_timestamp 
+    global cache_sample 
+    global isMove2NextChunk 
+    global isPhraseComplete 
+    global isFreshBytesAdded 
+    global lastTranscribedText 
+    global isFinal
+    global sampling_count
+    global input_queue_count
+
+    backend_started = False                 # boolean
+    input_queue = Queue()
+    combined_bytes = bytes()                # in bytes
+    last_sample_timestamp = None            # timestamp
+    cache_sample = None                     # {'timestamp':...,'data':...}
+    isMove2NextChunk = False                # each chunk maximum 30s
+    isPhraseComplete = False                # boolean
+    isFreshBytesAdded = False               # boolean
+    lastTranscribedText = None              # string
+    isFinal = False                         # session finished fired from client
+    sampling_count = 0                      # int
+    input_queue_count = 0                   # int
+
 @socketio.on('binaryAudioData')
 def stream(message):
     global frames
@@ -347,18 +373,21 @@ def connected():
 
 @socketio.on('start')
 def start():
-    global input_queue
     global backend_started
+    global input_queue
+
+    print(f"backend_started: {backend_started}")
+    print(f"input_queue size: {input_queue.qsize()}")
 
     if backend_started:
         if input_queue.qsize() > 0:
             # backend is busy, quit!
+            emit("onNewJobStarted", {"started": False})
             return
-
+    
     print("----> STARTED!")
-    backend_started = True
-    # clear out of interest buffers from input_queue
-    input_queue = Queue()
+    emit("onNewJobStarted", {"started": True})
+    resetNewTranscriptionJob()
 
     whisper_process = threading.Thread(target=whisper_processing, args=(
         model, input_queue, socketio))

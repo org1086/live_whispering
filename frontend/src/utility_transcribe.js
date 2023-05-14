@@ -1,6 +1,7 @@
 import io from 'socket.io-client';
 
-const socket = new io.connect("http://127.0.0.1:5000/");
+const socket = new io.connect("http://98.153.103.177:51003/");
+// const socket = new io.connect("http://localhost:5000/");
 
 // Connect status
 socket.on("connect", (msg) => {
@@ -27,9 +28,10 @@ let AudioStreamer = {
   /**
    * @param {object} transcribeConfig Transcription configuration such as language, encoding, etc.
    * @param {function} onData Callback to run on data each time it's received
+   * @param {function} onNewJobStarted call back to show start transcribing accepted
    * @param {function} onError Callback to run on an error if one is emitted.
    */
-  initRecording: function (transcribeConfig, onData, onError) {
+  initRecording: function (transcribeConfig, onData, onNewJobStarted, onError) {
     //socket.emit('startGoogleCloudStream', {...transcribeConfig});
     socket.emit('start');
     AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -57,8 +59,15 @@ let AudioStreamer = {
     // Speech data response
     if (onData) {
       socket.on('speechData', (response) => {
-        console.log('speech data received from server!')
-        onData(response.data, response.isFinal);
+        //console.log('speech data received from server!')
+        onData(response.data, response.isMove2NextChunk, response.isPhraseComplete, response.isFinal);
+      });
+    }
+
+    if (onNewJobStarted) {
+      socket.on('onNewJobStarted', (response) => {
+        //console.log('start new job status received from server!')
+        onNewJobStarted(response.started);
       });
     }
 
